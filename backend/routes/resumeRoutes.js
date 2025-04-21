@@ -7,6 +7,10 @@ const mammoth = require("mammoth");
 
 const router = express.Router();
 
+const { spawn } = require("child_process");
+
+const { scoreResume } = require("../controllers/resumeScoring");
+
 // === Multer storage config ===
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -90,6 +94,60 @@ router.post("/upload", upload.single("resume"), async (req, res) => {
   }
 });
 
+router.post("/score", express.json(), (req, res) => {
+  try {
+    const { resumeText, jobDescription, keywords } = req.body;
+    if (!resumeText || !jobDescription || !keywords) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    const scores = scoreResume(resumeText, jobDescription, keywords);
+    res.json({ status: "success", scores });
+  } catch (error) {
+    console.error("Error scoring resume:", error);
+    res.status(500).json({ error: "Failed to score resume" });
+  }
+});
+
+router.post("/nlp-analysis", express.json(), (req, res) => {
+  const { resumeText } = req.body;
+  if (!resumeText) {
+    return res.status(400).json({ error: "Missing resumeText in request body" });
+  }
+
+  const pythonProcess = spawn("python", ["./backend/routes/nlp_analysis.py"]);
+
+  let dataString = "";
+  let errorString = "";
+
+  pythonProcess.stdout.on("data", (data) => {
+    dataString += data.toString();
+  });
+
+  pythonProcess.stderr.on("data", (data) => {
+    errorString += data.toString();
+    console.error("Python stderr:", data.toString());
+  });
+
+  pythonProcess.on("close", (code) => {
+    console.log("Python script exited with code:", code);
+    if (code !== 0) {
+      console.error("Python script error output:", errorString);
+      return res.status(500).json({ error: "Failed to analyze resume" });
+    }
+    try {
+      const result = JSON.parse(dataString);
+      res.json({ status: "success", analysis: result });
+    } catch (parseError) {
+      console.error("JSON parse error:", parseError);
+      res.status(500).json({ error: "Failed to parse analysis result" });
+    }
+  });
+
+  // Write resumeText to python process stdin
+  pythonProcess.stdin.write(resumeText);
+  pythonProcess.stdin.end();
+});
+
 // === Resume Parsing Functions ===
 const KNOWN_SKILLS = {
   primary: ["JavaScript", "React", "Node.js", "Python", "Java", "C++"],
@@ -157,7 +215,7 @@ function calculateTotalExperience(text) {
       if (startYear > lastEndYear) {
         totalYears += endYear - startYear;
       } else if (endYear > lastEndYear) {
-        totalYears += endYear - lastEndYear;
+        totalYears - lastEndYear;
       }
       lastEndYear = Math.max(lastEndYear, endYear);
     });
@@ -189,30 +247,30 @@ function identifyMissingSkills(text) {
 function extractExperience(text) {
   const expRegex = /(?:experience|work history|employment)[:\s]*(.*?)(?=\n\w+:|$)/gis;
   const matches = [...text.matchAll(expRegex)];
-  
+
   return matches.flatMap(match => {
     const expSection = match[1];
     const entries = expSection.split('\n').filter(line => {
-      return line.trim() && line.match(/\d{4}|present/i) && 
-             !line.toLowerCase().includes('education') &&
-             !line.match(/bachelor|master|phd/i);
+      return line.trim() && line.match(/\d{4}|present/i) &&
+        !line.toLowerCase().includes('education') &&
+        !line.match(/bachelor|master|phd/i);
     });
-    
+
     return entries.map(line => {
       const expMatch = line.match(/^(.*?)(?:at|,| - )\s*([^(]+)\s*\((\d{4}\s*-\s*(?:present|\d{4}))\)/i);
       if (!expMatch) return null;
-      
+
       const [, title, company, duration] = expMatch;
       const responsibilities = [];
-      
+
       const bulletPoints = expSection.split('\n')
         .filter(bp => bp.trim().match(/^[•-]\s/))
         .map(bp => bp.replace(/^[•-]\s/, '').trim())
         .filter(bp => {
           return !bp.match(/bachelor|master|phd|university|college|gpa/i) &&
-                 !bp.match(/\d{4}\s*-\s*\d{4}/);
+            !bp.match(/\d{4}\s*-\s*\d{4}/);
         });
-      
+
       if (bulletPoints.length > 0) {
         responsibilities.push(...bulletPoints);
       } else {
@@ -224,7 +282,7 @@ function extractExperience(text) {
           );
         }
       }
-      
+
       return {
         title: title.trim(),
         company: company.trim(),
@@ -264,5 +322,61 @@ function generateRecommendations(data) {
     addMoreKeywords: missingSkills
   };
 }
+
+router.post("/recommendations", express.json(), (req, res) => {
+  const { resumeText } = req.body;
+  if (!resumeText) {
+    return res.status(400).json({ error: "Missing resumeText in request body" });
+  }
+
+  const pythonProcess = spawn("python", ["./backend/routes/nlp_analysis.py"]);
+
+  let dataString = "";
+  let errorString = "";
+
+  pythonProcess.stdout.on("data", (data) => {
+    dataString += data.toString();
+  });
+
+  pythonProcess.stderr.on("data", (data) => {
+    errorString += data.toString();
+    console.error("Python stderr:", data.toString());
+  });
+
+  pythonProcess.on("close", (code) => {
+    console.log("Python script exited with code:", code);
+    if (code !== 0) {
+      console.error("Python script error output:", errorString);
+      return res.status(500).json({ error: "Failed to analyze resume" });
+    }
+    try {
+      const analysis = JSON.parse(dataString);
+
+      // Generate actionable recommendations based on analysis
+      const recommendations = [];
+
+      if (analysis.missingSections && analysis.missingSections.length > 0) {
+        recommendations.push(`Missing sections: ${analysis.missingSections.join(", ")}`);
+      }
+
+      if (analysis.structureScore !== undefined && analysis.structureScore < 7) {
+        recommendations.push("Improve resume structure for better readability.");
+      }
+
+      if (analysis.keywords && analysis.keywords.length > 0) {
+        recommendations.push(`Consider including more relevant keywords such as: ${analysis.keywords.join(", ")}`);
+      }
+
+      res.json({ status: "success", recommendations });
+    } catch (parseError) {
+      console.error("JSON parse error:", parseError);
+      res.status(500).json({ error: "Failed to parse analysis result" });
+    }
+  });
+
+  // Write resumeText to python process stdin
+  pythonProcess.stdin.write(resumeText);
+  pythonProcess.stdin.end();
+});
 
 module.exports = router;

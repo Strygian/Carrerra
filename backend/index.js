@@ -1,4 +1,7 @@
-require("dotenv").config(); // Load environment variables
+const path = require("path");
+const dotenv = require("dotenv");
+dotenv.config({ path: path.resolve(__dirname, ".env") }); // Explicitly load .env from backend directory
+
 const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db"); // Import DB connection function

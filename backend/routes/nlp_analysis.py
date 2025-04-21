@@ -45,5 +45,6 @@ def analyze_resume(text):
     })
 
 if __name__ == "__main__":
-    text_input = sys.argv[1]  # Read text from Node.js
+    import sys
+    text_input = sys.stdin.read()  # Read text from stdin
     print(analyze_resume(text_input))
